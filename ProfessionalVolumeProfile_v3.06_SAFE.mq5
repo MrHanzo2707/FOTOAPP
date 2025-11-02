@@ -511,21 +511,28 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
       return;
    }
 
-   //--- ✅ FIX: Profil am rechten Fensterrand fixieren (statt an letzter Kerze)
+   //--- ✅ FIX: Profil am rechten Fensterrand fixieren (inkl. Chart-Shift)
+   // Hole Fensterbreite in Pixeln
+   int chartWidth = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+
+   // Konvertiere rechten Pixel-Rand zu Zeit
+   datetime timeAtRightEdge;
+   double priceAtRightEdge;
+   int subwindow = 0;
+
+   if(!ChartXYToTimePrice(0, chartWidth - 1, 0, subwindow, timeAtRightEdge, priceAtRightEdge))
+   {
+      Print("FEHLER: ChartXYToTimePrice fehlgeschlagen");
+      return;
+   }
+
+   // JETZT ist timeAtRightEdge die ECHTE Zeit am rechten Fensterrand!
+   datetime t2 = timeAtRightEdge;
    long periodSecs = PeriodSeconds(_Period);
-
-   // Berechne Abstand zwischen rightmostVisibleBar und echtem rechten Rand
-   int totalBars = ArraySize(rates);
-   int newestBarIndex = totalBars - 1;
-   int barsToRightEdge = newestBarIndex - rightmostVisibleBar;
-
-   // Rechte Kante: Zeit der rightmost bar PLUS Abstand zum Rand
-   datetime rightEdge = rates[rightmostVisibleBar].time;
-   datetime t2 = (datetime)(rightEdge + barsToRightEdge * periodSecs);
    datetime t1 = (datetime)(t2 - periodSecs * InpHistogramWidth);
 
    Print("DEBUG: DrawProfile - t1=", TimeToString(t1), " t2=", TimeToString(t2),
-         " barsToRightEdge=", barsToRightEdge);
+         " chartWidth=", chartWidth);
 
    int objectsCreated = 0;
 
