@@ -512,13 +512,20 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
    }
 
    //--- ✅ FIX: Profil am rechten Fensterrand fixieren (statt an letzter Kerze)
-   long rightBoundary = ChartGetInteger(0, CHART_TIME_PRICE_MAX);
-   datetime t2 = (datetime)rightBoundary;
    long periodSecs = PeriodSeconds(_Period);
+
+   // Berechne Abstand zwischen rightmostVisibleBar und echtem rechten Rand
+   int totalBars = ArraySize(rates);
+   int newestBarIndex = totalBars - 1;
+   int barsToRightEdge = newestBarIndex - rightmostVisibleBar;
+
+   // Rechte Kante: Zeit der rightmost bar PLUS Abstand zum Rand
+   datetime rightEdge = rates[rightmostVisibleBar].time;
+   datetime t2 = (datetime)(rightEdge + barsToRightEdge * periodSecs);
    datetime t1 = (datetime)(t2 - periodSecs * InpHistogramWidth);
 
    Print("DEBUG: DrawProfile - t1=", TimeToString(t1), " t2=", TimeToString(t2),
-         " rightBoundary=", rightBoundary);
+         " barsToRightEdge=", barsToRightEdge);
 
    int objectsCreated = 0;
 
