@@ -2,11 +2,11 @@
 //|                                   ProfessionalVolumeProfile.mq5  |
 //|                          (c) CODINGMASTER+ / Institutionell      |
 //|                                  VPVR - Visible Range            |
-//|                                  VERSION 3.06 - SAFE FIXES       |
+//|                                  VERSION 3.06 - RIGHT EDGE FIX   |
 //+------------------------------------------------------------------+
 #property copyright "CODINGMASTER+"
 #property version   "3.06"
-#property description "Volume Profile Visible Range - 2 sichere Bug-Fixes"
+#property description "Volume Profile Visible Range - Profil am rechten Rand fixiert"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -511,14 +511,14 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
       return;
    }
 
-   datetime rightEdge = rates[rightmostVisibleBar].time;
+   //--- ✅ FIX: Profil am rechten Fensterrand fixieren (statt an letzter Kerze)
+   long rightBoundary = ChartGetInteger(0, CHART_TIME_PRICE_MAX);
+   datetime t2 = (datetime)rightBoundary;
    long periodSecs = PeriodSeconds(_Period);
-
-   datetime t2 = rightEdge;
    datetime t1 = (datetime)(t2 - periodSecs * InpHistogramWidth);
 
    Print("DEBUG: DrawProfile - t1=", TimeToString(t1), " t2=", TimeToString(t2),
-         " rightmostBar=", rightmostVisibleBar);
+         " rightBoundary=", rightBoundary);
 
    int objectsCreated = 0;
 
