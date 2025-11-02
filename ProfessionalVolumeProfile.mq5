@@ -2,11 +2,11 @@
 //|                                   ProfessionalVolumeProfile.mq5  |
 //|                          (c) CODINGMASTER+ / Institutionell      |
 //|                                  VPVR - Visible Range            |
-//|                                  VERSION 3.06 - CRITICAL FIXES   |
+//|                                  VERSION 3.06 - POC FIX          |
 //+------------------------------------------------------------------+
 #property copyright "CODINGMASTER+"
 #property version   "3.06"
-#property description "Volume Profile Visible Range - Performance & Bug Fixes"
+#property description "Volume Profile Visible Range - Minimale Bug-Fixes"
 #property indicator_chart_window
 #property indicator_plots 0
 
@@ -38,9 +38,6 @@ input bool            InpShowVALines     = true;  // Zeige VA High/Low Linien
 input color           InpColorVAH        = clrLimeGreen;  // Farbe Value Area High
 input color           InpColorVAL        = clrRed;        // Farbe Value Area Low
 input int             InpVALineWidth     = 2;    // Breite VA-Linien (1-5)
-
-input group "=== Advanced ==="
-input bool            InpDebugMode       = false; // Debug-Modus aktivieren
 
 //============================================================================
 // CONSTANTS
@@ -74,11 +71,6 @@ int          g_totalBuckets = 0;
 double       g_rowHeight = 0;
 string       g_objPrefix = "";
 SVisibleRange g_lastRange;
-
-//============================================================================
-// DEBUG MACRO
-//============================================================================
-#define DEBUG_PRINT(msg) if(InpDebugMode) Print(msg)
 
 //============================================================================
 // INITIALIZATION
@@ -122,10 +114,6 @@ int OnInit()
             return(INIT_PARAMETERS_INCORRECT);
          }
       }
-      else
-      {
-         Print("WARNUNG: Konnte Volumen nicht prüfen, Error: ", GetLastError());
-      }
    }
 
    g_objPrefix = "VolProfile_" + IntegerToString(ChartID()) + "_";
@@ -138,7 +126,9 @@ int OnInit()
    Print("Professional Volume Profile v3.06 initialisiert");
    Print("  Symbol: ", _Symbol);
    Print("  Zeilen: ", InpNumberOfRows);
-   Print("  Debug: ", InpDebugMode ? "EIN" : "AUS");
+
+   //--- Initiale Berechnung triggern
+   EventSetTimer(1);
 
    return(INIT_SUCCEEDED);
 }
@@ -148,9 +138,19 @@ int OnInit()
 //============================================================================
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    CleanupObjects();
    ArrayFree(g_buckets);
    Print("VPVR v3.06 beendet");
+}
+
+//============================================================================
+// TIMER - Für initiale Berechnung
+//============================================================================
+void OnTimer()
+{
+   EventKillTimer();
+   CalculateAndDrawProfile();
 }
 
 //============================================================================
@@ -195,68 +195,60 @@ int OnCalculate(const int rates_total,
 //============================================================================
 void CalculateAndDrawProfile()
 {
-   //--- 1. Ermittle sichtbaren Bereich ZUERST (für optimierte CopyRates)
-   int firstVisible = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
-   int visibleBars = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-   int totalBars = Bars(_Symbol, _Period);
+   //--- 1. Hole Preis-Daten mit CopyRates
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);
 
-   if(totalBars <= 0 || visibleBars <= 0 || firstVisible < 0)
+   int totalBars = Bars(_Symbol, _Period);
+   if(totalBars <= 0)
    {
-      DEBUG_PRINT("DEBUG: Ungültige Chart-Parameter");
+      Print("DEBUG: Keine Bars verfügbar");
       return;
    }
 
-   DEBUG_PRINT("DEBUG: CHART_FIRST_VISIBLE_BAR=" + IntegerToString(firstVisible) +
-               " CHART_VISIBLE_BARS=" + IntegerToString(visibleBars));
-
-   //--- ✅ FIX #1: Kopiere nur benötigte Bars (nicht alle!)
-   // Margin für Sicherheit: max(100 Bars, HistogramWidth + 50)
+   //--- ✅ FIX #1: Kopiere nur benötigte Bars statt alle
+   int visibleBars = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
    int margin = MathMax(100, InpHistogramWidth + 50);
    int barsNeeded = MathMin(totalBars, visibleBars + margin);
 
-   MqlRates rates[];
-   ArraySetAsSeries(rates, false);
    int copied = CopyRates(_Symbol, _Period, 0, barsNeeded, rates);
-
    if(copied <= 0)
    {
       Print("FEHLER: CopyRates fehlgeschlagen, Error: ", GetLastError());
       return;
    }
 
-   DEBUG_PRINT("DEBUG: " + IntegerToString(copied) + " Bars kopiert (optimiert von " +
-               IntegerToString(totalBars) + ")");
+   Print("DEBUG: ", copied, " Bars kopiert (statt ", totalBars, ")");
 
-   //--- 2. Sichtbaren Bereich im kopierten Array ermitteln
+   //--- 2. Sichtbaren Bereich ermitteln
    SVisibleRange currentRange;
-   if(!GetVisibleRange(copied, totalBars, firstVisible, visibleBars, currentRange))
+   if(!GetVisibleRange(copied, totalBars, currentRange))
    {
-      DEBUG_PRINT("DEBUG: GetVisibleRange fehlgeschlagen");
+      Print("DEBUG: GetVisibleRange fehlgeschlagen");
       return;
    }
 
-   DEBUG_PRINT("DEBUG: Sichtbarer Bereich: firstBar=" + IntegerToString(currentRange.firstBar) +
-               " lastBar=" + IntegerToString(currentRange.lastBar));
+   Print("DEBUG: Sichtbarer Bereich: firstBar=", currentRange.firstBar,
+         " lastBar=", currentRange.lastBar);
 
    //--- ✅ FIX #2: Preis-Spanne ZUERST finden (VOR Dirty-Check!)
    double minPrice, maxPrice;
    if(!FindPriceRange(currentRange.firstBar, currentRange.lastBar, rates, minPrice, maxPrice))
    {
-      DEBUG_PRINT("DEBUG: FindPriceRange fehlgeschlagen");
+      Print("DEBUG: FindPriceRange fehlgeschlagen");
       CleanupObjects();
       return;
    }
 
+   Print("DEBUG: Preis-Spanne: min=", minPrice, " max=", maxPrice);
+
    currentRange.minPrice = minPrice;
    currentRange.maxPrice = maxPrice;
-
-   DEBUG_PRINT("DEBUG: Preis-Spanne: min=" + DoubleToString(minPrice, _Digits) +
-               " max=" + DoubleToString(maxPrice, _Digits));
 
    //--- 3. Dirty-Check (jetzt MIT korrekten Preisen)
    if(!HasRangeChanged(currentRange))
    {
-      DEBUG_PRINT("DEBUG: Range hat sich nicht geändert, überspringe Neuberechnung");
+      Print("DEBUG: Range hat sich nicht geändert, überspringe Neuberechnung");
       return;
    }
 
@@ -264,24 +256,23 @@ void CalculateAndDrawProfile()
    InitializeBuckets(minPrice, maxPrice);
    if(g_totalBuckets == 0)
    {
-      DEBUG_PRINT("DEBUG: Keine Buckets initialisiert");
+      Print("DEBUG: Keine Buckets initialisiert");
       CleanupObjects();
       return;
    }
 
-   DEBUG_PRINT("DEBUG: " + IntegerToString(g_totalBuckets) + " Buckets initialisiert, rowHeight=" +
-               DoubleToString(g_rowHeight, _Digits));
+   Print("DEBUG: ", g_totalBuckets, " Buckets initialisiert, rowHeight=", g_rowHeight);
 
    //--- 5. Volumen akkumulieren
    long totalVolume = AccumulateVolume(currentRange.firstBar, currentRange.lastBar, rates, minPrice);
    if(totalVolume == 0)
    {
-      DEBUG_PRINT("DEBUG: Kein Volumen akkumuliert");
+      Print("DEBUG: Kein Volumen akkumuliert");
       CleanupObjects();
       return;
    }
 
-   DEBUG_PRINT("DEBUG: Total Volumen=" + IntegerToString(totalVolume));
+   Print("DEBUG: Total Volumen=", totalVolume);
 
    //--- 6. POC und Value Area finden
    double pocPrice = 0;
@@ -289,13 +280,12 @@ void CalculateAndDrawProfile()
 
    if(maxVolume == 0)
    {
-      DEBUG_PRINT("DEBUG: POC nicht gefunden");
+      Print("DEBUG: POC nicht gefunden");
       CleanupObjects();
       return;
    }
 
-   DEBUG_PRINT("DEBUG: POC Preis=" + DoubleToString(pocPrice, _Digits) +
-               " maxVolume=" + IntegerToString(maxVolume));
+   Print("DEBUG: POC Preis=", pocPrice, " maxVolume=", maxVolume);
 
    //--- 7. Profil zeichnen
    DrawProfile(rates, maxVolume, pocPrice, currentRange.lastBar);
@@ -303,16 +293,26 @@ void CalculateAndDrawProfile()
    //--- 8. Bereich speichern
    g_lastRange = currentRange;
 
-   DEBUG_PRINT("DEBUG: Profil erfolgreich gezeichnet");
+   Print("DEBUG: Profil erfolgreich gezeichnet");
    ChartRedraw(0);
 }
 
 //============================================================================
 // HILFSFUNKTIONEN
 //============================================================================
-bool GetVisibleRange(int copiedBars, int totalBars, int firstVisible, int visibleBars,
-                     SVisibleRange &outRange)
+bool GetVisibleRange(int copiedBars, int totalBars, SVisibleRange &outRange)
 {
+   int firstVisible = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
+   int visibleBars = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
+
+   Print("DEBUG: CHART_FIRST_VISIBLE_BAR=", firstVisible, " CHART_VISIBLE_BARS=", visibleBars);
+
+   if(firstVisible < 0 || visibleBars <= 0 || totalBars <= 0)
+   {
+      Print("DEBUG: Ungültige Chart-Parameters");
+      return false;
+   }
+
    int newestBarIndex = totalBars - 1;
    int leftmostVisibleIndex = newestBarIndex - firstVisible;
    int rightmostVisibleIndex = leftmostVisibleIndex + visibleBars - 1;
@@ -325,7 +325,7 @@ bool GetVisibleRange(int copiedBars, int totalBars, int firstVisible, int visibl
 
    if(leftmostVisibleIndex > rightmostVisibleIndex)
    {
-      DEBUG_PRINT("DEBUG: leftmost > rightmost");
+      Print("DEBUG: leftmost > rightmost");
       return false;
    }
 
@@ -354,8 +354,7 @@ bool FindPriceRange(int startBar, int endBar, const MqlRates &rates[],
 {
    if(startBar < 0 || endBar >= ArraySize(rates) || startBar > endBar)
    {
-      DEBUG_PRINT("DEBUG: FindPriceRange ungültige Indizes: start=" + IntegerToString(startBar) +
-                  " end=" + IntegerToString(endBar) + " arraySize=" + IntegerToString(ArraySize(rates)));
+      Print("DEBUG: FindPriceRange ungültige Indizes: start=", startBar, " end=", endBar, " arraySize=", ArraySize(rates));
       return false;
    }
 
@@ -370,8 +369,7 @@ bool FindPriceRange(int startBar, int endBar, const MqlRates &rates[],
 
    if(outMaxPrice <= outMinPrice)
    {
-      DEBUG_PRINT("DEBUG: Ungültige Preisspanne: max=" + DoubleToString(outMaxPrice, _Digits) +
-                  " min=" + DoubleToString(outMinPrice, _Digits));
+      Print("DEBUG: Ungültige Preisspanne: max=", outMaxPrice, " min=", outMinPrice);
       return false;
    }
 
@@ -387,7 +385,7 @@ void InitializeBuckets(double minPrice, double maxPrice)
 
    if(g_rowHeight <= 0)
    {
-      DEBUG_PRINT("DEBUG: Ungültige rowHeight=" + DoubleToString(g_rowHeight, _Digits));
+      Print("DEBUG: Ungültige rowHeight=", g_rowHeight);
       g_totalBuckets = 0;
       return;
    }
@@ -407,7 +405,7 @@ long AccumulateVolume(int startBar, int endBar, const MqlRates &rates[], double 
 {
    if(startBar < 0 || endBar >= ArraySize(rates) || startBar > endBar)
    {
-      DEBUG_PRINT("DEBUG: AccumulateVolume ungültige Indizes");
+      Print("DEBUG: AccumulateVolume ungültige Indizes");
       return 0;
    }
 
@@ -512,14 +510,13 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
 
    if(ArraySize(rates) == 0 || g_totalBuckets == 0 || maxVolume == 0)
    {
-      DEBUG_PRINT("DEBUG: DrawProfile - ungültige Parameter");
+      Print("DEBUG: DrawProfile - ungültige Parameter");
       return;
    }
 
    if(rightmostVisibleBar < 0 || rightmostVisibleBar >= ArraySize(rates))
    {
-      DEBUG_PRINT("DEBUG: DrawProfile - ungültiger rightmostVisibleBar=" +
-                  IntegerToString(rightmostVisibleBar));
+      Print("DEBUG: DrawProfile - ungültiger rightmostVisibleBar=", rightmostVisibleBar);
       return;
    }
 
@@ -529,8 +526,8 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
    datetime t2 = rightEdge;
    datetime t1 = (datetime)(t2 - periodSecs * InpHistogramWidth);
 
-   DEBUG_PRINT("DEBUG: DrawProfile - t1=" + TimeToString(t1) + " t2=" + TimeToString(t2) +
-               " rightmostBar=" + IntegerToString(rightmostVisibleBar));
+   Print("DEBUG: DrawProfile - t1=", TimeToString(t1), " t2=", TimeToString(t2),
+         " rightmostBar=", rightmostVisibleBar);
 
    int objectsCreated = 0;
 
@@ -580,18 +577,18 @@ void DrawProfile(const MqlRates &rates[], long maxVolume, double pocPrice, int r
       {
          DrawHorizontalLine(g_objPrefix + "VAH_Line", t1, t2, vahPrice, InpColorVAH, InpVALineWidth);
          objectsCreated++;
-         DEBUG_PRINT("DEBUG: VAH gezeichnet bei " + DoubleToString(vahPrice, _Digits));
+         Print("DEBUG: VAH gezeichnet bei ", vahPrice);
       }
 
       if(valPrice > 0)
       {
          DrawHorizontalLine(g_objPrefix + "VAL_Line", t1, t2, valPrice, InpColorVAL, InpVALineWidth);
          objectsCreated++;
-         DEBUG_PRINT("DEBUG: VAL gezeichnet bei " + DoubleToString(valPrice, _Digits));
+         Print("DEBUG: VAL gezeichnet bei ", valPrice);
       }
    }
 
-   DEBUG_PRINT("DEBUG: " + IntegerToString(objectsCreated) + " Objekte gezeichnet");
+   Print("DEBUG: ", objectsCreated, " Objekte gezeichnet");
 }
 
 void DrawRectangle(string name, datetime t1, double p1, datetime t2, double p2, color clr)
@@ -636,6 +633,6 @@ void CleanupObjects()
 {
    int deleted = ObjectsDeleteAll(0, g_objPrefix);
    if(deleted > 0)
-      DEBUG_PRINT("DEBUG: " + IntegerToString(deleted) + " Objekte gelöscht");
+      Print("DEBUG: ", deleted, " Objekte gelöscht");
 }
 //+------------------------------------------------------------------+
